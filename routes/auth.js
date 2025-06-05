@@ -1,7 +1,7 @@
 const express = require('express');
 const { body, validationResult } = require('express-validator');
 const passport = require('passport');
-const User = require('../models/User');
+const User = require('../models/user');
 const { generateTokens, verifyRefreshToken } = require('../utils/tokenUtils');
 const { requireAuth } = require('../middleware/auth');
 
