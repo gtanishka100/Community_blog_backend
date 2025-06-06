@@ -7,6 +7,11 @@ const { requireAuth } = require('../middleware/auth');
 
 const router = express.Router();
 
+// ⏱️ Cold start test route
+router.get('/ping', (req, res) => {
+  res.send('pong');
+});
+
 // Validation middleware
 const validateSignup = [
   body('firstName')
@@ -24,18 +29,23 @@ const validateSignup = [
   body('password')
     .isLength({ min: 6 })
     .withMessage('Password must be at least 6 characters long')
-    .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/)
-    .withMessage('Password must contain at least one uppercase letter, one lowercase letter, and one number')
+    // 🔧 Loosened regex to be practical during development
+    .matches(/^(?=.*[A-Za-z])(?=.*\d)/)
+    .withMessage('Password must contain at least one letter and one number')
 ];
 
 const validateLogin = [
   body('email').isEmail().normalizeEmail().withMessage('Please provide a valid email'),
   body('password').notEmpty().withMessage('Password is required')
 ];
+
+// POST /api/auth/signup
 router.post('/signup', validateSignup, async (req, res) => {
+  console.time('signup');
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
+      console.log('Validation errors:', errors.array());
       return res.status(400).json({
         error: 'Validation failed',
         details: errors.array()
@@ -44,28 +54,27 @@ router.post('/signup', validateSignup, async (req, res) => {
 
     const { firstName, lastName, email, password } = req.body;
 
-    // Check if user already exists
     const existingUser = await User.findOne({ email });
     if (existingUser) {
+      console.log('Signup attempt with existing email:', email);
       return res.status(409).json({ error: 'User already exists with this email' });
     }
 
-    // Create new user
     const user = new User({
       firstName,
       lastName,
       email,
-      password
+      password,
+      refreshTokens: [] // Initialize
     });
-
-    await user.save();
 
     // Generate tokens
     const { accessToken, refreshToken } = generateTokens(user._id);
-
-    // Save refresh token
     user.refreshTokens.push({ token: refreshToken });
+
     await user.save();
+
+    console.timeEnd('signup');
 
     res.status(201).json({
       message: 'User created successfully',
@@ -89,9 +98,11 @@ router.post('/signup', validateSignup, async (req, res) => {
 
 // POST /api/auth/login
 router.post('/login', validateLogin, async (req, res) => {
+  console.time('login');
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
+      console.log('Login validation errors:', errors.array());
       return res.status(400).json({
         error: 'Validation failed',
         details: errors.array()
@@ -100,27 +111,23 @@ router.post('/login', validateLogin, async (req, res) => {
 
     const { email, password } = req.body;
 
-    // Find user
     const user = await User.findOne({ email });
     if (!user) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    // Check password
     const isMatch = await user.comparePassword(password);
     if (!isMatch) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    // Clean expired tokens
     user.cleanExpiredTokens();
 
-    // Generate new tokens
     const { accessToken, refreshToken } = generateTokens(user._id);
-
-    // Save refresh token
     user.refreshTokens.push({ token: refreshToken });
     await user.save();
+
+    console.timeEnd('login');
 
     res.json({
       message: 'Login successful',
@@ -151,13 +158,11 @@ router.post('/refresh', async (req, res) => {
       return res.status(401).json({ error: 'Refresh token required' });
     }
 
-    // Verify refresh token
     const decoded = verifyRefreshToken(refreshToken);
     if (!decoded) {
       return res.status(401).json({ error: 'Invalid refresh token' });
     }
 
-    // Find user and check if refresh token exists
     const user = await User.findById(decoded.id);
     if (!user) {
       return res.status(401).json({ error: 'User not found' });
@@ -168,10 +173,7 @@ router.post('/refresh', async (req, res) => {
       return res.status(401).json({ error: 'Invalid refresh token' });
     }
 
-    // Generate new tokens
     const { accessToken, refreshToken: newRefreshToken } = generateTokens(user._id);
-
-    // Remove old refresh token and add new one
     user.refreshTokens = user.refreshTokens.filter(tokenObj => tokenObj.token !== refreshToken);
     user.refreshTokens.push({ token: newRefreshToken });
     await user.save();
@@ -195,15 +197,12 @@ router.post('/logout', requireAuth, async (req, res) => {
     const user = await User.findById(req.user.id);
 
     if (refreshToken) {
-      // Remove specific refresh token
       user.refreshTokens = user.refreshTokens.filter(tokenObj => tokenObj.token !== refreshToken);
     } else {
-      // Remove all refresh tokens (logout from all devices)
       user.refreshTokens = [];
     }
 
     await user.save();
-
     res.json({ message: 'Logged out successfully' });
   } catch (error) {
     console.error('Logout error:', error);
@@ -211,25 +210,20 @@ router.post('/logout', requireAuth, async (req, res) => {
   }
 });
 
-// GET /api/auth/google
+// Google OAuth routes
 router.get('/google', passport.authenticate('google', {
   scope: ['profile', 'email']
 }));
 
-// GET /api/auth/google/callback
 router.get('/google/callback',
   passport.authenticate('google', { session: false }),
   async (req, res) => {
     try {
-      // Generate tokens
       const { accessToken, refreshToken } = generateTokens(req.user._id);
-
-      // Save refresh token
       const user = await User.findById(req.user._id);
       user.refreshTokens.push({ token: refreshToken });
       await user.save();
 
-      // Redirect to frontend with tokens
       const redirectUrl = `${process.env.CLIENT_URL}/auth/success?accessToken=${accessToken}&refreshToken=${refreshToken}`;
       res.redirect(redirectUrl);
     } catch (error) {
