@@ -148,6 +148,7 @@ router.get('/suggestions', requireAuth, async (req, res) => {
       conn.requester.equals(req.user._id) ? conn.recipient : conn.requester
     );
     
+    
     // Add current user ID to exclude
     connectedUserIds.push(req.user._id);
 

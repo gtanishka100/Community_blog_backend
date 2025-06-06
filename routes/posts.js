@@ -9,10 +9,6 @@ const router = express.Router();
 
 // Validation middleware
 const validatePost = [
-  body('title')
-    .trim()
-    .isLength({ min: 1, max: 200 })
-    .withMessage('Title must be between 1 and 200 characters'),
   body('content')
     .trim()
     .isLength({ min: 10, max: 10000 })
@@ -47,10 +43,9 @@ router.post('/', requireAuth, validatePost, async (req, res) => {
       });
     }
 
-    const { title, content, tags = [], isPublished = true } = req.body;
+    const { content, tags = [], isPublished = true } = req.body;
 
     const post = new Post({
-      title,
       content,
       author: req.user._id,
       tags: tags.map(tag => tag.toLowerCase().trim()),
@@ -165,9 +160,8 @@ router.put('/:id', requireAuth, validatePost, async (req, res) => {
       return res.status(403).json({ error: 'Not authorized to update this post' });
     }
 
-    const { title, content, tags = [], isPublished } = req.body;
+    const { content, tags = [], isPublished } = req.body;
 
-    post.title = title;
     post.content = content;
     post.tags = tags.map(tag => tag.toLowerCase().trim());
     if (isPublished !== undefined) post.isPublished = isPublished;
