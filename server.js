@@ -25,11 +25,7 @@ const app = express();
 // Security middleware
 app.use(helmet());
 app.use(cors({
-  origin: [
-    'http://localhost:3000',                          
-    'https://community-blog-platform.vercel.app'     
-  ],
-  credentials: true
+  origin: '*'
 }));
 
 // Rate limiting
