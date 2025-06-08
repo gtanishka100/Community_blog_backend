@@ -33,22 +33,11 @@ app.use(cors({
 
 // Rate limiting
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
+  windowMs: 15 * 60 * 1000,
+  max: 100,
   message: 'Too many requests from this IP, please try again later.'
 });
-
-// Apply rate limiting to API routes
 app.use('/api/', limiter);
-
-// Stricter rate limiting for auth routes
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 20, // limit each IP to 20 requests per windowMs for auth
-  message: 'Too many authentication attempts, please try again later.'
-});
-
-app.use('/api/auth', authLimiter);
 
 // Body parsing middleware
 app.use(express.json({ limit: '10mb' }));
@@ -65,97 +54,63 @@ app.use('/api/users', usersRoutes);
 
 // Health check
 app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'OK', 
-    timestamp: new Date().toISOString(),
-    uptime: process.uptime()
-  });
+  res.json({ status: 'OK', timestamp: new Date().toISOString() });
 });
 
 // API documentation endpoint
 app.get('/api', (req, res) => {
   res.json({
-    message: 'Blog Platform API',
+    message: 'Community Blog Platform API',
     version: '1.0.0',
     endpoints: {
       auth: {
-        'POST /api/auth/signup': 'Register a new user',
+        'POST /api/auth/signup': 'Create new user account',
         'POST /api/auth/login': 'Login user',
         'POST /api/auth/refresh': 'Refresh access token',
         'POST /api/auth/logout': 'Logout user',
         'GET /api/auth/google': 'Google OAuth login',
-        'GET /api/auth/me': 'Get current user profile'
+        'GET /api/auth/me': 'Get current user info (protected)'
       },
       posts: {
-        'POST /api/posts': 'Create a new post',
-        'GET /api/posts/feed': 'Get posts from connections',
+        'POST /api/posts': 'Create new post (protected)',
+        'GET /api/posts/feed': 'Get posts from connections (protected)',
+        'GET /api/posts/discover': 'Get discovery feed (public)',
+        'GET /api/posts/trending-tags': 'Get trending tags',
         'GET /api/posts/:id': 'Get specific post',
-        'PUT /api/posts/:id': 'Update post',
-        'DELETE /api/posts/:id': 'Delete post',
-        'POST /api/posts/:id/like': 'Like/unlike post',
-        'POST /api/posts/:id/comment': 'Add comment to post',
+        'PUT /api/posts/:id': 'Update post (protected)',
+        'DELETE /api/posts/:id': 'Delete post (protected)',
+        'POST /api/posts/:id/like': 'Like/unlike post (protected)',
+        'POST /api/posts/:id/comment': 'Add comment to post (protected)',
         'GET /api/posts/user/:userId': 'Get posts by user'
       },
       connections: {
-        'POST /api/connections/request': 'Send connection request',
-        'GET /api/connections/requests': 'Get incoming requests',
-        'GET /api/connections/sent': 'Get sent requests',
-        'PUT /api/connections/:id/accept': 'Accept request',
-        'PUT /api/connections/:id/decline': 'Decline request',
-        'DELETE /api/connections/:id': 'Remove connection',
-        'GET /api/connections': 'Get all connections',
-        'GET /api/connections/status/:userId': 'Get connection status'
+        'POST /api/connections/request': 'Send connection request (protected)',
+        'GET /api/connections/requests': 'Get incoming requests (protected)',
+        'GET /api/connections/sent': 'Get sent requests (protected)',
+        'PUT /api/connections/:id/accept': 'Accept connection (protected)',
+        'PUT /api/connections/:id/decline': 'Decline connection (protected)',
+        'DELETE /api/connections/:id': 'Remove connection (protected)',
+        'GET /api/connections': 'Get all connections (protected)',
+        'GET /api/connections/status/:userId': 'Get connection status (protected)'
       },
       users: {
-        'GET /api/users/search': 'Search for users',
-        'GET /api/users/suggestions': 'Get user suggestions',
-        'GET /api/users/:id': 'Get user profile',
-        'GET /api/users/:id/posts': 'Get user posts',
-        'GET /api/users/trending/tags': 'Get trending tags',
-        'GET /api/users/stats/overview': 'Get platform stats'
+        'GET /api/users/search': 'Search users (protected)',
+        'GET /api/users/suggestions': 'Get user suggestions (protected)',
+        'GET /api/users/:id': 'Get user profile'
       }
-    },
-    documentation: 'Visit /api for endpoint details'
+    }
   });
 });
 
 // 404 handler
 app.use('*', (req, res) => {
-  res.status(404).json({ 
-    error: 'Route not found',
-    availableEndpoints: '/api'
-  });
+  res.status(404).json({ error: 'Route not found' });
 });
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error('Error occurred:', err.stack);
-  
-  // Handle specific error types
-  if (err.name === 'ValidationError') {
-    return res.status(400).json({ 
-      error: 'Validation Error', 
-      details: err.message 
-    });
-  }
-  
-  if (err.name === 'CastError') {
-    return res.status(400).json({ 
-      error: 'Invalid ID format' 
-    });
-  }
-  
-  if (err.code === 11000) {
-    return res.status(409).json({ 
-      error: 'Duplicate entry',
-      field: Object.keys(err.keyPattern)[0]
-    });
-  }
-  
-  res.status(500).json({ 
-    error: 'Internal server error',
-    message: process.env.NODE_ENV === 'development' ? err.message : 'Something went wrong!'
-  });
+  console.error(err.stack);
+  res.status(500).json({ error: 'Something went wrong!' });
 });
 
 // Connect to MongoDB
@@ -168,8 +123,7 @@ mongoose.connect(process.env.MONGODB_URI)
   const PORT = process.env.PORT || 3000;
   app.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
-    console.log(`📚 API Documentation: http://localhost:${PORT}/api`);
-    console.log(`🏥 Health Check: http://localhost:${PORT}/health`);
+    console.log(`📚 API documentation available at http://localhost:${PORT}/api`);
   });
 })
 .catch((error) => {
@@ -187,18 +141,4 @@ process.on('SIGINT', async () => {
   console.log('Shutting down gracefully...');
   await mongoose.connection.close();
   process.exit(0);
-});
-
-// Handle unhandled promise rejections
-process.on('unhandledRejection', (err, promise) => {
-  console.error('Unhandled Promise Rejection:', err.message);
-  console.error('Shutting down server...');
-  process.exit(1);
-});
-
-// Handle uncaught exceptions
-process.on('uncaughtException', (err) => {
-  console.error('Uncaught Exception:', err.message);
-  console.error('Shutting down server...');
-  process.exit(1);
 });

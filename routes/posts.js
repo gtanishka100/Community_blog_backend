@@ -9,6 +9,10 @@ const router = express.Router();
 
 // Validation middleware
 const validatePost = [
+  body('title')
+    .trim()
+    .isLength({ min: 1, max: 200 })
+    .withMessage('Title must be between 1 and 200 characters'),
   body('content')
     .trim()
     .isLength({ min: 10, max: 10000 })
@@ -43,9 +47,10 @@ router.post('/', requireAuth, validatePost, async (req, res) => {
       });
     }
 
-    const { content, tags = [], isPublished = true } = req.body;
+    const { title, content, tags = [], isPublished = true } = req.body;
 
     const post = new Post({
+      title,
       content,
       author: req.user._id,
       tags: tags.map(tag => tag.toLowerCase().trim()),
@@ -160,8 +165,9 @@ router.put('/:id', requireAuth, validatePost, async (req, res) => {
       return res.status(403).json({ error: 'Not authorized to update this post' });
     }
 
-    const { content, tags = [], isPublished } = req.body;
+    const { title, content, tags = [], isPublished } = req.body;
 
+    post.title = title;
     post.content = content;
     post.tags = tags.map(tag => tag.toLowerCase().trim());
     if (isPublished !== undefined) post.isPublished = isPublished;
@@ -262,6 +268,223 @@ router.post('/:id/comment', requireAuth, validateComment, async (req, res) => {
     });
   } catch (error) {
     console.error('Add comment error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /api/posts/discover - Get random/trending posts for discovery feed (like Instagram)
+router.get('/discover', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+    const sortBy = req.query.sort || 'mixed'; // 'latest', 'popular', 'random', 'mixed'
+
+    let sortOptions = {};
+    let aggregationPipeline = [];
+
+    // Base match condition
+    const matchCondition = { isPublished: true };
+
+    switch (sortBy) {
+      case 'latest':
+        sortOptions = { createdAt: -1 };
+        break;
+      
+      case 'popular':
+        // Sort by engagement score (likes + comments count)
+        aggregationPipeline = [
+          { $match: matchCondition },
+          {
+            $addFields: {
+              engagementScore: {
+                $add: [
+                  { $size: "$likes" },
+                  { $multiply: [{ $size: "$comments" }, 2] } // Comments weighted more
+                ]
+              }
+            }
+          },
+          { $sort: { engagementScore: -1, createdAt: -1 } },
+          { $skip: skip },
+          { $limit: limit }
+        ];
+        break;
+      
+      case 'random':
+        aggregationPipeline = [
+          { $match: matchCondition },
+          { $sample: { size: limit * 2 } }, // Get more for randomness
+          { $skip: skip },
+          { $limit: limit }
+        ];
+        break;
+      
+      case 'mixed':
+      default:
+        // Mixed algorithm: combine recent and popular posts
+        aggregationPipeline = [
+          { $match: matchCondition },
+          {
+            $addFields: {
+              // Calculate a mixed score based on recency and engagement
+              mixedScore: {
+                $add: [
+                  // Recency score (newer posts get higher score)
+                  {
+                    $divide: [
+                      { $subtract: [new Date(), "$createdAt"] },
+                      1000 * 60 * 60 * 24 // Convert to days
+                    ]
+                  },
+                  // Engagement score
+                  {
+                    $multiply: [
+                      {
+                        $add: [
+                          { $size: "$likes" },
+                          { $multiply: [{ $size: "$comments" }, 1.5] }
+                        ]
+                      },
+                      0.1 // Weight factor
+                    ]
+                  }
+                ]
+              }
+            }
+          },
+          { $sort: { mixedScore: -1 } },
+          { $skip: skip },
+          { $limit: limit }
+        ];
+        break;
+    }
+
+    let posts;
+    let totalPosts;
+
+    if (aggregationPipeline.length > 0) {
+      // Use aggregation pipeline
+      const aggregationWithPopulate = [
+        ...aggregationPipeline,
+        {
+          $lookup: {
+            from: 'users',
+            localField: 'author',
+            foreignField: '_id',
+            as: 'author',
+            pipeline: [{ $project: { firstName: 1, lastName: 1, email: 1 } }]
+          }
+        },
+        {
+          $lookup: {
+            from: 'users',
+            localField: 'comments.user',
+            foreignField: '_id',
+            as: 'commentUsers',
+            pipeline: [{ $project: { firstName: 1, lastName: 1 } }]
+          }
+        },
+        {
+          $addFields: {
+            author: { $arrayElemAt: ['$author', 0] },
+            comments: {
+              $map: {
+                input: '$comments',
+                as: 'comment',
+                in: {
+                  $mergeObjects: [
+                    '$comment',
+                    {
+                      user: {
+                        $arrayElemAt: [
+                          {
+                            $filter: {
+                              input: '$commentUsers',
+                              cond: { $eq: ['$this._id', '$comment.user'] }
+                            }
+                          },
+                          0
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        { $unset: 'commentUsers' }
+      ];
+
+      posts = await Post.aggregate(aggregationWithPopulate);
+      
+      // Get total count for pagination
+      totalPosts = await Post.countDocuments(matchCondition);
+    } else {
+      // Use regular find with sort
+      posts = await Post.find(matchCondition)
+        .populate('author', 'firstName lastName email')
+        .populate('comments.user', 'firstName lastName')
+        .sort(sortOptions)
+        .skip(skip)
+        .limit(limit);
+
+      totalPosts = await Post.countDocuments(matchCondition);
+    }
+
+    res.json({
+      posts,
+      pagination: {
+        currentPage: page,
+        totalPages: Math.ceil(totalPosts / limit),
+        totalPosts,
+        hasNext: page < Math.ceil(totalPosts / limit),
+        hasPrev: page > 1
+      },
+      sortBy
+    });
+  } catch (error) {
+    console.error('Get discover feed error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /api/posts/trending-tags - Get trending hashtags/tags
+router.get('/trending-tags', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 10;
+    
+    // Get trending tags using aggregation
+    const trendingTags = await Post.aggregate([
+      { $match: { isPublished: true } },
+      { $unwind: '$tags' },
+      {
+        $group: {
+          _id: '$tags',
+          count: { $sum: 1 },
+          recentPosts: { $sum: { $cond: [
+            { $gte: ['$createdAt', new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)] },
+            1,
+            0
+          ] } }
+        }
+      },
+      { $sort: { recentPosts: -1, count: -1 } },
+      { $limit: limit },
+      {
+        $project: {
+          tag: '$_id',
+          totalPosts: '$count',
+          recentPosts: '$recentPosts',
+          _id: 0
+        }
+      }
+    ]);
+
+    res.json(trendingTags);
+  } catch (error) {
+    console.error('Get trending tags error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
