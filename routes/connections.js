@@ -6,7 +6,6 @@ const { requireAuth } = require('../middleware/auth');
 
 const router = express.Router();
 
-// Validation middleware
 const validateConnectionRequest = [
   body('userId')
     .isMongoId()
@@ -18,7 +17,7 @@ const validateConnectionRequest = [
     .withMessage('Message must not exceed 500 characters')
 ];
 
-// POST /api/connections/request - Send a connection request
+// POST /api/connections/request 
 router.post('/request', requireAuth, validateConnectionRequest, async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -30,19 +29,14 @@ router.post('/request', requireAuth, validateConnectionRequest, async (req, res)
     }
 
     const { userId, message } = req.body;
-
-    // Check if user exists
     const targetUser = await User.findById(userId);
     if (!targetUser) {
       return res.status(404).json({ error: 'User not found' });
     }
-
-    // Check if user is trying to connect to themselves
     if (userId === req.user._id.toString()) {
       return res.status(400).json({ error: 'Cannot connect to yourself' });
     }
 
-    // Check if connection already exists
     const existingConnection = await Connection.findOne({
       $or: [
         { requester: req.user._id, recipient: userId },
@@ -120,12 +114,10 @@ router.put('/:id/accept', requireAuth, async (req, res) => {
       return res.status(404).json({ error: 'Connection request not found' });
     }
 
-    // Check if user is the recipient
     if (!connection.recipient.equals(req.user._id)) {
       return res.status(403).json({ error: 'Not authorized to accept this request' });
     }
-
-    // Check if request is still pending
+    
     if (connection.status !== 'pending') {
       return res.status(400).json({ error: 'Connection request is no longer pending' });
     }
@@ -146,20 +138,17 @@ router.put('/:id/accept', requireAuth, async (req, res) => {
   }
 });
 
-// PUT /api/connections/:id/decline - Decline a connection request
+// PUT /api/connections/:id/decline 
 router.put('/:id/decline', requireAuth, async (req, res) => {
   try {
     const connection = await Connection.findById(req.params.id);
     if (!connection) {
       return res.status(404).json({ error: 'Connection request not found' });
     }
-
-    // Check if user is the recipient
     if (!connection.recipient.equals(req.user._id)) {
       return res.status(403).json({ error: 'Not authorized to decline this request' });
     }
 
-    // Check if request is still pending
     if (connection.status !== 'pending') {
       return res.status(400).json({ error: 'Connection request is no longer pending' });
     }
@@ -176,7 +165,7 @@ router.put('/:id/decline', requireAuth, async (req, res) => {
   }
 });
 
-// DELETE /api/connections/:id - Remove a connection
+// DELETE /api/connections/:id 
 router.delete('/:id', requireAuth, async (req, res) => {
   try {
     const connection = await Connection.findById(req.params.id);
@@ -184,7 +173,6 @@ router.delete('/:id', requireAuth, async (req, res) => {
       return res.status(404).json({ error: 'Connection not found' });
     }
 
-    // Check if user is part of the connection
     if (!connection.requester.equals(req.user._id) && !connection.recipient.equals(req.user._id)) {
       return res.status(403).json({ error: 'Not authorized to remove this connection' });
     }
@@ -198,7 +186,7 @@ router.delete('/:id', requireAuth, async (req, res) => {
   }
 });
 
-// GET /api/connections - Get all connections for the current user
+// GET /api/connections - Get all connections 
 router.get('/', requireAuth, async (req, res) => {
   try {
     const connections = await Connection.find({
@@ -211,7 +199,6 @@ router.get('/', requireAuth, async (req, res) => {
     .populate('recipient', 'firstName lastName email')
     .sort({ createdAt: -1 });
 
-    // Transform connections to show the connected user
     const transformedConnections = connections.map(conn => {
       const connectedUser = conn.requester.equals(req.user._id) 
         ? conn.recipient 
@@ -232,7 +219,7 @@ router.get('/', requireAuth, async (req, res) => {
   }
 });
 
-// GET /api/connections/status/:userId - Get connection status with a specific user
+// GET /api/connections/status/:userId 
 router.get('/status/:userId', requireAuth, async (req, res) => {
   try {
     const { userId } = req.params;

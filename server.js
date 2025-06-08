@@ -6,17 +6,14 @@ const rateLimit = require('express-rate-limit');
 const passport = require('passport');
 require('dotenv').config();
 
-// DEBUG: Check if environment variables are loaded
 console.log('Environment check:');
 console.log('MONGODB_URI exists:', !!process.env.MONGODB_URI);
 console.log('MONGODB_URI starts with mongodb:', process.env.MONGODB_URI?.startsWith('mongodb'));
 if (process.env.MONGODB_URI) {
-  // Show first part of URI for debugging (hide credentials)
   const uriParts = process.env.MONGODB_URI.split('@');
   console.log('MongoDB cluster:', uriParts[1] || 'URI format issue');
 }
 
-// Import routes and config
 const authRoutes = require('./routes/auth');
 const postsRoutes = require('./routes/posts');
 const connectionsRoutes = require('./routes/connections');
@@ -25,13 +22,11 @@ require('./config/passport');
 
 const app = express();
 
-// Security middleware
 app.use(helmet());
 app.use(cors({
   origin: '*'
 }));
 
-// Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
@@ -39,25 +34,19 @@ const limiter = rateLimit({
 });
 app.use('/api/', limiter);
 
-// Body parsing middleware
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Passport middleware
 app.use(passport.initialize());
 
-// Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/posts', postsRoutes);
 app.use('/api/connections', connectionsRoutes);
 app.use('/api/users', usersRoutes);
 
-// Health check
 app.get('/health', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString() });
 });
-
-// API documentation endpoint
 app.get('/api', (req, res) => {
   res.json({
     message: 'Community Blog Platform API',
@@ -106,8 +95,6 @@ app.get('/api', (req, res) => {
 app.use('*', (req, res) => {
   res.status(404).json({ error: 'Route not found' });
 });
-
-// Error handling middleware
 app.use((err, req, res, next) => {
   console.error(err.stack);
   res.status(500).json({ error: 'Something went wrong!' });
@@ -135,8 +122,6 @@ mongoose.connect(process.env.MONGODB_URI)
   console.error('4. Check IP whitelist in MongoDB Atlas');
   process.exit(1);
 });
-
-// Graceful shutdown
 process.on('SIGINT', async () => {
   console.log('Shutting down gracefully...');
   await mongoose.connection.close();

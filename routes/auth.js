@@ -7,12 +7,10 @@ const { requireAuth } = require('../middleware/auth');
 
 const router = express.Router();
 
-// ⏱️ Cold start test route
 router.get('/ping', (req, res) => {
   res.send('pong');
 });
 
-// Validation middleware
 const validateSignup = [
   body('firstName')
     .trim()
@@ -29,7 +27,6 @@ const validateSignup = [
   body('password')
     .isLength({ min: 6 })
     .withMessage('Password must be at least 6 characters long')
-    // 🔧 Loosened regex to be practical during development
     .matches(/^(?=.*[A-Za-z])(?=.*\d)/)
     .withMessage('Password must contain at least one letter and one number')
 ];
@@ -65,10 +62,10 @@ router.post('/signup', validateSignup, async (req, res) => {
       lastName,
       email,
       password,
-      refreshTokens: [] // Initialize
+      refreshTokens: []
     });
 
-    // Generate tokens
+
     const { accessToken, refreshToken } = generateTokens(user._id);
     user.refreshTokens.push({ token: refreshToken });
 

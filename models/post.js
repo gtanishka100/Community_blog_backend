@@ -54,7 +54,6 @@ const postSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Calculate read time based on content length (average 200 words per minute)
 postSchema.pre('save', function(next) {
   if (this.isModified('content')) {
     const wordsPerMinute = 200;
@@ -64,7 +63,6 @@ postSchema.pre('save', function(next) {
   next();
 });
 
-// Add indexes for better query performance
 postSchema.index({ author: 1, createdAt: -1 });
 postSchema.index({ tags: 1 });
 postSchema.index({ createdAt: -1 });

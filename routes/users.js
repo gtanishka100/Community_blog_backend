@@ -6,8 +6,6 @@ const Connection = require('../models/connection');
 const { requireAuth } = require('../middleware/auth');
 
 const router = express.Router();
-
-// Validation middleware
 const validateSearch = [
   query('q')
     .trim()
@@ -15,7 +13,7 @@ const validateSearch = [
     .withMessage('Search query must be between 1 and 100 characters')
 ];
 
-// GET /api/users/search - Search for users
+// GET /api/users/search 
 router.get('/search', requireAuth, validateSearch, async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -31,13 +29,10 @@ router.get('/search', requireAuth, validateSearch, async (req, res) => {
     const limitNum = parseInt(limit);
     const skip = (pageNum - 1) * limitNum;
 
-    // Create search regex
     const searchRegex = new RegExp(q, 'i');
-
-    // Search in firstName, lastName, and email
     const users = await User.find({
       $and: [
-        { _id: { $ne: req.user._id } }, // Exclude current user
+        { _id: { $ne: req.user._id } }, 
         {
           $or: [
             { firstName: searchRegex },
@@ -61,7 +56,6 @@ router.get('/search', requireAuth, validateSearch, async (req, res) => {
     .limit(limitNum)
     .sort({ firstName: 1, lastName: 1 });
 
-    // Get total count for pagination
     const totalUsers = await User.countDocuments({
       $and: [
         { _id: { $ne: req.user._id } },
@@ -83,8 +77,6 @@ router.get('/search', requireAuth, validateSearch, async (req, res) => {
         }
       ]
     });
-
-    // Get connection status for each user
     const userIds = users.map(user => user._id);
     const connections = await Connection.find({
       $or: [
@@ -92,8 +84,6 @@ router.get('/search', requireAuth, validateSearch, async (req, res) => {
         { requester: { $in: userIds }, recipient: req.user._id }
       ]
     });
-
-    // Create connection status map
     const connectionMap = {};
     connections.forEach(conn => {
       const otherUserId = conn.requester.equals(req.user._id) 
@@ -106,8 +96,6 @@ router.get('/search', requireAuth, validateSearch, async (req, res) => {
         isRequester: conn.requester.equals(req.user._id)
       };
     });
-
-    // Add connection status to users
     const usersWithConnectionStatus = users.map(user => ({
       ...user.toObject(),
       connection: connectionMap[user._id.toString()] || { status: 'none' }
@@ -128,37 +116,27 @@ router.get('/search', requireAuth, validateSearch, async (req, res) => {
     res.status(500).json({ error: 'Internal server error' });
   }
 });
-
-// GET /api/users/suggestions - Get user suggestions (users with no connection)
 router.get('/suggestions', requireAuth, async (req, res) => {
   try {
     const { limit = 10 } = req.query;
     const limitNum = parseInt(limit);
-
-    // Get all existing connections
     const existingConnections = await Connection.find({
       $or: [
         { requester: req.user._id },
         { recipient: req.user._id }
       ]
     });
-
-    // Extract user IDs that are already connected or have pending requests
     const connectedUserIds = existingConnections.map(conn => 
       conn.requester.equals(req.user._id) ? conn.recipient : conn.requester
     );
-    
-    
-    // Add current user ID to exclude
     connectedUserIds.push(req.user._id);
 
-    // Find users not in the connected list
     const suggestions = await User.find({
       _id: { $nin: connectedUserIds }
     })
     .select('firstName lastName email createdAt')
     .limit(limitNum)
-    .sort({ createdAt: -1 }); // Newest users first
+    .sort({ createdAt: -1 }); 
 
     res.json(suggestions);
   } catch (error) {
@@ -166,8 +144,6 @@ router.get('/suggestions', requireAuth, async (req, res) => {
     res.status(500).json({ error: 'Internal server error' });
   }
 });
-
-// GET /api/users/:id - Get user profile
 router.get('/:id', async (req, res) => {
   try {
     const user = await User.findById(req.params.id)
@@ -176,22 +152,16 @@ router.get('/:id', async (req, res) => {
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
-
-    // Get user's post count
     const postCount = await Post.countDocuments({
       author: req.params.id,
       isPublished: true
     });
-
-    // Get connection count
     const connectionCount = await Connection.countDocuments({
       $or: [
         { requester: req.params.id, status: 'accepted' },
         { recipient: req.params.id, status: 'accepted' }
       ]
     });
-
-    // If current user is authenticated, get connection status
     let connectionStatus = null;
     if (req.user) {
       const connection = await Connection.findOne({
@@ -231,7 +201,7 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// GET /api/users/:id/posts - Get user's posts
+// GET /api/users/:id/posts 
 router.get('/:id/posts', async (req, res) => {
   try {
     const { page = 1, limit = 10 } = req.query;
@@ -269,13 +239,11 @@ router.get('/:id/posts', async (req, res) => {
   }
 });
 
-// GET /api/users/trending/tags - Get trending tags
+// GET /api/users/trending/tags 
 router.get('/trending/tags', async (req, res) => {
   try {
     const { limit = 10 } = req.query;
     const limitNum = parseInt(limit);
-
-    // Get trending tags from the last 30 days
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
@@ -317,14 +285,12 @@ router.get('/trending/tags', async (req, res) => {
   }
 });
 
-// GET /api/users/stats/overview - Get platform overview stats
+// GET /api/users/stats/overview 
 router.get('/stats/overview', async (req, res) => {
   try {
     const totalUsers = await User.countDocuments();
     const totalPosts = await Post.countDocuments({ isPublished: true });
     const totalConnections = await Connection.countDocuments({ status: 'accepted' });
-
-    // Get recent activity (last 7 days)
     const sevenDaysAgo = new Date();
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
 

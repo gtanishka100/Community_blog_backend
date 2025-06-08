@@ -28,24 +28,21 @@ passport.use(new GoogleStrategy({
 
 }, async (accessToken, refreshToken, profile, done) => {
   try {
-    // Check if user already exists with this Google ID
     let user = await User.findOne({ googleId: profile.id });
     
     if (user) {
       return done(null, user);
     }
     
-    // Check if user exists with same email
+
     user = await User.findOne({ email: profile.emails[0].value });
     
     if (user) {
-      // Link Google account to existing user
       user.googleId = profile.id;
       await user.save();
       return done(null, user);
     }
     
-    // Create new user
     user = new User({
       googleId: profile.id,
       firstName: profile.name.givenName,
