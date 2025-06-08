@@ -215,6 +215,11 @@ router.post('/:id/like', requireAuth, async (req, res) => {
       return res.status(404).json({ error: 'Post not found' });
     }
 
+    // Initialize likes array if it doesn't exist
+    if (!post.likes) {
+      post.likes = [];
+    }
+
     const existingLike = post.likes.find(like => like.user.equals(req.user._id));
 
     if (existingLike) {
@@ -252,6 +257,11 @@ router.post('/:id/comment', requireAuth, validateComment, async (req, res) => {
 
     const { content } = req.body;
 
+    // Initialize comments array if it doesn't exist
+    if (!post.comments) {
+      post.comments = [];
+    }
+
     post.comments.push({
       user: req.user._id,
       content
@@ -275,10 +285,14 @@ router.post('/:id/comment', requireAuth, validateComment, async (req, res) => {
 // GET /api/posts/discover - Get random/trending posts for discovery feed (like Instagram)
 router.get('/discover', async (req, res) => {
   try {
+    console.log('Discover route called with query:', req.query);
+    
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
     const sortBy = req.query.sort || 'mixed'; // 'latest', 'popular', 'random', 'mixed'
+
+    console.log('Parameters:', { page, limit, skip, sortBy });
 
     let sortOptions = {};
     let aggregationPipeline = [];
@@ -289,9 +303,11 @@ router.get('/discover', async (req, res) => {
     switch (sortBy) {
       case 'latest':
         sortOptions = { createdAt: -1 };
+        console.log('Using latest sort');
         break;
       
       case 'popular':
+        console.log('Using popular sort');
         // Sort by engagement score (likes + comments count)
         aggregationPipeline = [
           { $match: matchCondition },
@@ -299,8 +315,8 @@ router.get('/discover', async (req, res) => {
             $addFields: {
               engagementScore: {
                 $add: [
-                  { $size: "$likes" },
-                  { $multiply: [{ $size: "$comments" }, 2] } // Comments weighted more
+                  { $size: { $ifNull: ["$likes", []] } }, // Handle null likes array
+                  { $multiply: [{ $size: { $ifNull: ["$comments", []] } }, 2] } // Handle null comments array
                 ]
               }
             }
@@ -312,9 +328,10 @@ router.get('/discover', async (req, res) => {
         break;
       
       case 'random':
+        console.log('Using random sort');
         aggregationPipeline = [
           { $match: matchCondition },
-          { $sample: { size: limit * 2 } }, // Get more for randomness
+          { $sample: { size: Math.min(limit * 2, 100) } }, // Limit sample size to prevent memory issues
           { $skip: skip },
           { $limit: limit }
         ];
@@ -322,38 +339,41 @@ router.get('/discover', async (req, res) => {
       
       case 'mixed':
       default:
+        console.log('Using mixed sort');
         // Mixed algorithm: combine recent and popular posts
+        const currentDate = new Date();
         aggregationPipeline = [
           { $match: matchCondition },
           {
             $addFields: {
               // Calculate a mixed score based on recency and engagement
-              mixedScore: {
+              daysSinceCreated: {
+                $divide: [
+                  { $subtract: [currentDate, "$createdAt"] },
+                  1000 * 60 * 60 * 24 // Convert to days
+                ]
+              },
+              engagementCount: {
                 $add: [
-                  // Recency score (newer posts get higher score)
-                  {
-                    $divide: [
-                      { $subtract: [new Date(), "$createdAt"] },
-                      1000 * 60 * 60 * 24 // Convert to days
-                    ]
-                  },
-                  // Engagement score
-                  {
-                    $multiply: [
-                      {
-                        $add: [
-                          { $size: "$likes" },
-                          { $multiply: [{ $size: "$comments" }, 1.5] }
-                        ]
-                      },
-                      0.1 // Weight factor
-                    ]
-                  }
+                  { $size: { $ifNull: ["$likes", []] } },
+                  { $multiply: [{ $size: { $ifNull: ["$comments", []] } }, 1.5] }
                 ]
               }
             }
           },
-          { $sort: { mixedScore: -1 } },
+          {
+            $addFields: {
+              mixedScore: {
+                $add: [
+                  // Recency score (newer posts get higher score, max 30 days)
+                  { $max: [0, { $subtract: [30, "$daysSinceCreated"] }] },
+                  // Engagement score with weight
+                  { $multiply: ["$engagementCount", 2] }
+                ]
+              }
+            }
+          },
+          { $sort: { mixedScore: -1, createdAt: -1 } },
           { $skip: skip },
           { $limit: limit }
         ];
@@ -364,7 +384,8 @@ router.get('/discover', async (req, res) => {
     let totalPosts;
 
     if (aggregationPipeline.length > 0) {
-      // Use aggregation pipeline
+      console.log('Using aggregation pipeline');
+      // Use aggregation pipeline with improved population
       const aggregationWithPopulate = [
         ...aggregationPipeline,
         {
@@ -377,61 +398,48 @@ router.get('/discover', async (req, res) => {
           }
         },
         {
-          $lookup: {
-            from: 'users',
-            localField: 'comments.user',
-            foreignField: '_id',
-            as: 'commentUsers',
-            pipeline: [{ $project: { firstName: 1, lastName: 1 } }]
+          $addFields: {
+            author: { $arrayElemAt: ['$author', 0] }
           }
         },
+        // Ensure arrays exist
         {
           $addFields: {
-            author: { $arrayElemAt: ['$author', 0] },
-            comments: {
-              $map: {
-                input: '$comments',
-                as: 'comment',
-                in: {
-                  $mergeObjects: [
-                    '$comment',
-                    {
-                      user: {
-                        $arrayElemAt: [
-                          {
-                            $filter: {
-                              input: '$commentUsers',
-                              cond: { $eq: ['$this._id', '$comment.user'] }
-                            }
-                          },
-                          0
-                        ]
-                      }
-                    }
-                  ]
-                }
-              }
-            }
+            comments: { $ifNull: ['$comments', []] },
+            likes: { $ifNull: ['$likes', []] }
           }
-        },
-        { $unset: 'commentUsers' }
+        }
       ];
 
       posts = await Post.aggregate(aggregationWithPopulate);
+      console.log('Aggregation returned posts:', posts.length);
+      
+      // Populate comment users separately for better performance
+      if (posts.length > 0) {
+        await Post.populate(posts, {
+          path: 'comments.user',
+          select: 'firstName lastName'
+        });
+      }
       
       // Get total count for pagination
       totalPosts = await Post.countDocuments(matchCondition);
     } else {
+      console.log('Using regular find');
       // Use regular find with sort
       posts = await Post.find(matchCondition)
         .populate('author', 'firstName lastName email')
         .populate('comments.user', 'firstName lastName')
         .sort(sortOptions)
         .skip(skip)
-        .limit(limit);
+        .limit(limit)
+        .lean(); // Use lean() for better performance
 
       totalPosts = await Post.countDocuments(matchCondition);
     }
+
+    console.log('Final posts count:', posts.length);
+    console.log('Total posts in DB:', totalPosts);
 
     res.json({
       posts,
@@ -446,7 +454,58 @@ router.get('/discover', async (req, res) => {
     });
   } catch (error) {
     console.error('Get discover feed error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error('Error details:', {
+      message: error.message,
+      stack: error.stack,
+      name: error.name
+    });
+    res.status(500).json({ 
+      error: 'Internal server error',
+      message: process.env.NODE_ENV === 'development' ? error.message : 'Something went wrong'
+    });
+  }
+});
+
+// Debug route for testing (remove in production)
+router.get('/discover-debug', async (req, res) => {
+  try {
+    console.log('Debug route called');
+    
+    // Test basic query first
+    const postCount = await Post.countDocuments({ isPublished: true });
+    console.log('Published posts count:', postCount);
+    
+    // Test simple find
+    const simplePosts = await Post.find({ isPublished: true })
+      .limit(2)
+      .select('title createdAt author likes comments')
+      .lean();
+    
+    console.log('Simple posts found:', simplePosts.length);
+    console.log('Sample post structure:', simplePosts[0]);
+    
+    // Test with population
+    const postsWithAuthor = await Post.find({ isPublished: true })
+      .populate('author', 'firstName lastName')
+      .limit(2)
+      .lean();
+    
+    console.log('Posts with author found:', postsWithAuthor.length);
+    
+    res.json({
+      success: true,
+      postCount,
+      simplePosts,
+      postsWithAuthor,
+      message: 'Debug successful - discover route should work now'
+    });
+    
+  } catch (error) {
+    console.error('Debug route error:', error);
+    res.status(500).json({
+      error: error.message,
+      stack: error.stack
+    });
   }
 });
 
