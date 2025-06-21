@@ -84,12 +84,11 @@ router.get('/discover', requireAuth, async (req, res) => {
   console.log('Timestamp:', new Date().toISOString());
 
   try {
-    const page = parseInt(req.query.page) || 1;
     const limit = Math.min(parseInt(req.query.limit) || 10, 50);
     const skip = (page - 1) * limit;
     const sortBy = req.query.sort || 'latest';
 
-    console.log('Pagination params:', { page, limit, skip, sortBy });
+    console.log('Pagination params:', {  limit, skip, sortBy });
 
     const connections = await Connection.find({
       $or: [
@@ -183,13 +182,6 @@ router.get('/discover', requireAuth, async (req, res) => {
     if (totalPosts === 0) {
       return res.json({
         posts: [],
-        pagination: {
-          currentPage: 1,
-          totalPages: 0,
-          totalPosts: 0,
-          hasNext: false,
-          hasPrev: false
-        },
         sortBy,
         message: 'No published posts found',
         connectionStats: {
@@ -216,13 +208,6 @@ router.get('/discover', requireAuth, async (req, res) => {
 
     res.json({
       posts: postsWithStats,
-      pagination: {
-        currentPage: page,
-        totalPages: Math.ceil(totalPosts / limit),
-        totalPosts,
-        hasNext: page < Math.ceil(totalPosts / limit),
-        hasPrev: page > 1
-      },
       sortBy,
       filters: {
         available: ['latest', 'oldest', 'popular', 'trending'],
@@ -386,14 +371,7 @@ router.get('/user/:userId', async (req, res) => {
     });
 
     res.json({
-      posts,
-      pagination: {
-        currentPage: page,
-        totalPages: Math.ceil(totalPosts / limit),
-        totalPosts,
-        hasNext: page < Math.ceil(totalPosts / limit),
-        hasPrev: page > 1
-      }
+      posts
     });
   } catch (error) {
     handleError(res, error, 'Get user posts error');
