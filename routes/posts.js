@@ -76,7 +76,7 @@ router.post('/', requireAuth, validatePost, async (req, res) => {
   }
 });
 
-// GET /api/posts/discover - Unified discovery feed with connections priority
+// GET /api/posts/discover - Unified discovery feed with connections priority, no pagination
 router.get('/discover', requireAuth, async (req, res) => {
   console.log('=== DISCOVER ROUTE CALLED ===');
   console.log('Query params:', req.query);
@@ -84,11 +84,7 @@ router.get('/discover', requireAuth, async (req, res) => {
   console.log('Timestamp:', new Date().toISOString());
 
   try {
-    const limit = Math.min(parseInt(req.query.limit) || 10, 50);
-    const skip = (page - 1) * limit;
     const sortBy = req.query.sort || 'latest';
-
-    console.log('Pagination params:', {  limit, skip, sortBy });
 
     const connections = await Connection.find({
       $or: [
@@ -171,29 +167,12 @@ router.get('/discover', requireAuth, async (req, res) => {
           });
           break;
         case 'trending':
-          // Already ordered: recent connections first, then others
+          // Already ordered
           break;
       }
     }
 
-    const totalPosts = allPosts.length;
-    console.log('Total posts after merging:', totalPosts);
-
-    if (totalPosts === 0) {
-      return res.json({
-        posts: [],
-        sortBy,
-        message: 'No published posts found',
-        connectionStats: {
-          connectionsCount: connectedUserIds.length - 1,
-          recentConnectionPosts: 0
-        }
-      });
-    }
-
-    const paginatedPosts = allPosts.slice(skip, skip + limit);
-
-    const postsWithStats = paginatedPosts.map(post => ({
+    const postsWithStats = allPosts.map(post => ({
       ...post,
       likesCount: post.likes ? post.likes.length : 0,
       commentsCount: post.comments ? post.comments.length : 0,
@@ -208,6 +187,7 @@ router.get('/discover', requireAuth, async (req, res) => {
 
     res.json({
       posts: postsWithStats,
+      totalPosts: postsWithStats.length,
       sortBy,
       filters: {
         available: ['latest', 'oldest', 'popular', 'trending'],
@@ -216,10 +196,8 @@ router.get('/discover', requireAuth, async (req, res) => {
       connectionStats: {
         connectionsCount: connectedUserIds.length - 1,
         recentConnectionPosts: connectedUserIds.length > 1
-          ? allPosts.filter(post =>
-              post.author &&
-              connectedUserIds.some(id => id.toString() === post.author._id.toString()) &&
-              new Date(post.createdAt) >= twentyFourHoursAgo
+          ? postsWithStats.filter(post =>
+              post.isFromConnection && post.isRecent
             ).length
           : 0
       }
@@ -231,7 +209,7 @@ router.get('/discover', requireAuth, async (req, res) => {
     res.status(500).json({
       error: 'Internal Server Error',
       message: error.message,
-      stack: error.stack // for debugging; remove in production
+      stack: error.stack
     });
   }
 });
