@@ -1,5 +1,6 @@
 const express = require('express');
 const { body, validationResult } = require('express-validator');
+const mongoose = require('mongoose'); // Add this import
 const Connection = require('../models/connection');
 const User = require('../models/user');
 const { requireAuth } = require('../middleware/auth');
@@ -29,18 +30,24 @@ router.post('/request', requireAuth, validateConnectionRequest, async (req, res)
     }
 
     const { userId, message } = req.body;
-    const targetUser = await User.findById(userId);
+    
+    // Convert userId to ObjectId for proper comparison
+    const targetUserId = new mongoose.Types.ObjectId(userId);
+    const currentUserId = req.user._id;
+
+    const targetUser = await User.findById(targetUserId);
     if (!targetUser) {
       return res.status(404).json({ error: 'User not found' });
     }
-    if (userId === req.user._id.toString()) {
+    
+    if (targetUserId.equals(currentUserId)) {
       return res.status(400).json({ error: 'Cannot connect to yourself' });
     }
 
     const existingConnection = await Connection.findOne({
       $or: [
-        { requester: req.user._id, recipient: userId },
-        { requester: userId, recipient: req.user._id }
+        { requester: currentUserId, recipient: targetUserId },
+        { requester: targetUserId, recipient: currentUserId }
       ]
     });
 
@@ -53,8 +60,8 @@ router.post('/request', requireAuth, validateConnectionRequest, async (req, res)
 
     // Create new connection request
     const connection = new Connection({
-      requester: req.user._id,
-      recipient: userId,
+      requester: currentUserId,
+      recipient: targetUserId,
       message: message || ''
     });
 
@@ -223,11 +230,12 @@ router.get('/', requireAuth, async (req, res) => {
 router.get('/status/:userId', requireAuth, async (req, res) => {
   try {
     const { userId } = req.params;
+    const targetUserId = new mongoose.Types.ObjectId(userId);
 
     const connection = await Connection.findOne({
       $or: [
-        { requester: req.user._id, recipient: userId },
-        { requester: userId, recipient: req.user._id }
+        { requester: req.user._id, recipient: targetUserId },
+        { requester: targetUserId, recipient: req.user._id }
       ]
     });
 
