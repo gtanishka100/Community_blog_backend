@@ -4,8 +4,10 @@ const Post = require('../models/post');
 const User = require('../models/user');
 const Connection = require('../models/connection');
 const { requireAuth } = require('../middleware/auth');
+const mongoose = require('mongoose');
 
 const router = express.Router();
+
 const validatePost = [
   body('content')
     .trim()
@@ -29,6 +31,7 @@ const validateComment = [
     .isLength({ min: 1, max: 1000 })
     .withMessage('Comment must be between 1 and 1000 characters')
 ];
+
 const handleError = (res, error, message = 'Internal server error') => {
   console.error(`${message}:`, error);
   res.status(500).json({ 
@@ -36,6 +39,7 @@ const handleError = (res, error, message = 'Internal server error') => {
     ...(process.env.NODE_ENV === 'development' && { details: error.message })
   });
 };
+
 const handleValidationError = (res, errors) => {
   return res.status(400).json({
     error: 'Validation failed',
@@ -72,39 +76,120 @@ router.post('/', requireAuth, validatePost, async (req, res) => {
   }
 });
 
-// GET /api/posts/discover - Public posts discovery 
-router.get('/discover', async (req, res) => {
+// GET /api/posts/discover - Unified discovery feed with connections priority
+router.get('/discover', requireAuth, async (req, res) => {
   console.log('=== DISCOVER ROUTE CALLED ===');
   console.log('Query params:', req.query);
-  console.log('Client IP:', req.ip);
+  console.log('User ID:', req.user._id);
   console.log('Timestamp:', new Date().toISOString());
   
   try {
     const page = parseInt(req.query.page) || 1;
-    const limit = Math.min(parseInt(req.query.limit) || 10, 50); // Cap at 50
+    const limit = Math.min(parseInt(req.query.limit) || 10, 50);
     const skip = (page - 1) * limit;
     const sortBy = req.query.sort || 'latest';
 
     console.log('Pagination params:', { page, limit, skip, sortBy });
 
-    let sortObj = { createdAt: -1 }; 
-    switch (sortBy) {
-      case 'oldest':
-        sortObj = { createdAt: 1 };
-        break;
-      case 'popular':
-        sortObj = { 'likes.length': -1, createdAt: -1 };
-        break;
-      case 'trending':
-        sortObj = { createdAt: -1 }; 
-        break;
-      default:
-        sortObj = { createdAt: -1 };
+    // Get user's connections
+    const connections = await Connection.find({
+      $or: [
+        { requester: req.user._id, status: 'accepted' },
+        { recipient: req.user._id, status: 'accepted' }
+      ]
+    });
+
+    const connectedUserIds = connections.map(conn => 
+      conn.requester.equals(req.user._id) ? conn.recipient : conn.requester
+    );
+    connectedUserIds.push(req.user._id); // Include user's own posts
+    
+    console.log('Connected user IDs count:', connectedUserIds.length - 1); // -1 to exclude self
+
+    // Define 24 hours ago
+    const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+    let allPosts = [];
+    
+    if (connectedUserIds.length > 1) { // User has connections
+      // Step 1: Get connection posts from last 24 hours
+      const recentConnectionPosts = await Post.find({
+        author: { $in: connectedUserIds },
+        isPublished: true,
+        createdAt: { $gte: twentyFourHoursAgo }
+      })
+      .populate('author', 'firstName lastName email')
+      .populate('comments.user', 'firstName lastName')
+      .sort({ createdAt: -1 })
+      .lean();
+
+      console.log('Recent connection posts:', recentConnectionPosts.length);
+
+      // Step 2: Get all other posts (excluding connection posts)
+      const otherPosts = await Post.find({
+        author: { $nin: connectedUserIds },
+        isPublished: true
+      })
+      .populate('author', 'firstName lastName email')
+      .populate('comments.user', 'firstName lastName')
+      .sort({ createdAt: -1 })
+      .lean();
+
+      // Step 3: Get older connection posts (older than 24 hours)
+      const olderConnectionPosts = await Post.find({
+        author: { $in: connectedUserIds },
+        isPublished: true,
+        createdAt: { $lt: twentyFourHoursAgo }
+      })
+      .populate('author', 'firstName lastName email')
+      .populate('comments.user', 'firstName lastName')
+      .sort({ createdAt: -1 })
+      .lean();
+
+      console.log('Other posts:', otherPosts.length);
+      console.log('Older connection posts:', olderConnectionPosts.length);
+
+      // Merge posts: Recent connections first, then chronologically merge others with older connections
+      const chronologicalOtherPosts = [...otherPosts, ...olderConnectionPosts]
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+      allPosts = [...recentConnectionPosts, ...chronologicalOtherPosts];
+    } else {
+      // User has no connections, show all posts chronologically
+      allPosts = await Post.find({ isPublished: true })
+        .populate('author', 'firstName lastName email')
+        .populate('comments.user', 'firstName lastName')
+        .sort({ createdAt: -1 })
+        .lean();
     }
 
-    console.log('Sort object:', sortObj);
-    const totalPosts = await Post.countDocuments({ isPublished: true });
-    console.log('Total published posts:', totalPosts);
+    // Apply sorting if requested (other than default latest)
+    if (sortBy !== 'latest') {
+      switch (sortBy) {
+        case 'oldest':
+          allPosts.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+          break;
+        case 'popular':
+          allPosts.sort((a, b) => {
+            const aLikes = a.likes ? a.likes.length : 0;
+            const bLikes = b.likes ? b.likes.length : 0;
+            if (bLikes === aLikes) {
+              return new Date(b.createdAt) - new Date(a.createdAt);
+            }
+            return bLikes - aLikes;
+          });
+          break;
+        case 'trending':
+          // Keep the current order (recent connections first, then chronological)
+          break;
+        default:
+          // Keep chronological order
+          break;
+      }
+    }
+
+    const totalPosts = allPosts.length;
+    console.log('Total posts after merging:', totalPosts);
 
     if (totalPosts === 0) {
       return res.json({
@@ -117,24 +202,25 @@ router.get('/discover', async (req, res) => {
           hasPrev: false
         },
         sortBy,
-        message: 'No published posts found'
+        message: 'No published posts found',
+        connectionStats: {
+          connectionsCount: connectedUserIds.length - 1,
+          recentConnectionPosts: 0
+        }
       });
     }
-    const posts = await Post.find({ isPublished: true })
-      .populate('author', 'firstName lastName email')
-      .populate('comments.user', 'firstName lastName')
-      .sort(sortObj)
-      .skip(skip)
-      .limit(limit)
-      .lean();
 
-    console.log('Posts fetched successfully, count:', posts.length);
+    // Apply pagination
+    const paginatedPosts = allPosts.slice(skip, skip + limit);
 
-    const postsWithStats = posts.map(post => ({
+    // Add stats and like status
+    const postsWithStats = paginatedPosts.map(post => ({
       ...post,
       likesCount: post.likes ? post.likes.length : 0,
       commentsCount: post.comments ? post.comments.length : 0,
-      isLiked: false 
+      isLiked: post.likes && post.likes.some(like => like.user.toString() === req.user._id.toString()),
+      isFromConnection: connectedUserIds.some(id => id.toString() === post.author._id.toString()),
+      isRecent: new Date(post.createdAt) >= twentyFourHoursAgo
     }));
 
     const response = {
@@ -150,6 +236,14 @@ router.get('/discover', async (req, res) => {
       filters: {
         available: ['latest', 'oldest', 'popular', 'trending'],
         current: sortBy
+      },
+      connectionStats: {
+        connectionsCount: connectedUserIds.length - 1,
+        recentConnectionPosts: connectedUserIds.length > 1 ? 
+          allPosts.filter(post => 
+            connectedUserIds.some(id => id.toString() === post.author._id.toString()) &&
+            new Date(post.createdAt) >= twentyFourHoursAgo
+          ).length : 0
       }
     };
 
@@ -164,9 +258,9 @@ router.get('/discover', async (req, res) => {
 });
 
 // GET /api/posts/discover-debug
-router.get('/discover-debug', async (req, res) => {
+router.get('/discover-debug', requireAuth, async (req, res) => {
   console.log('=== DEBUG ROUTE CALLED ===');
-  console.log('Client IP:', req.ip);
+  console.log('User ID:', req.user._id);
   console.log('Headers:', req.headers);
   
   try {
@@ -180,14 +274,38 @@ router.get('/discover-debug', async (req, res) => {
     
     const indexes = await Post.collection.getIndexes();
     
+    // Get connection info
+    const connections = await Connection.find({
+      $or: [
+        { requester: req.user._id, status: 'accepted' },
+        { recipient: req.user._id, status: 'accepted' }
+      ]
+    });
+    
+    const connectedUserIds = connections.map(c => 
+      c.requester.equals(req.user._id) ? c.recipient : c.requester
+    );
+    connectedUserIds.push(req.user._id);
+    
+    const recentConnectionPosts = await Post.countDocuments({
+      author: { $in: connectedUserIds },
+      isPublished: true,
+      createdAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }
+    });
+    
     const debugInfo = {
       success: true,
       timestamp: new Date().toISOString(),
-      clientIP: req.ip,
+      userId: req.user._id,
       database: {
         connected: mongoose.connection.readyState === 1,
         totalPosts: totalCount,
         publishedPosts: publishedCount
+      },
+      connectionInfo: {
+        userConnections: connections.length,
+        recentConnectionPosts: recentConnectionPosts,
+        connectedUserIds: connectedUserIds.length
       },
       sampleData: samplePosts.map(post => ({
         id: post._id,
@@ -210,55 +328,12 @@ router.get('/discover-debug', async (req, res) => {
       success: false,
       error: error.message,
       timestamp: new Date().toISOString(),
-      clientIP: req.ip
+      userId: req.user._id
     });
   }
 });
 
-// GET /api/posts/feed - Get posts from connections
-router.get('/feed', requireAuth, async (req, res) => {
-  try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = Math.min(parseInt(req.query.limit) || 10, 50);
-    const skip = (page - 1) * limit;
-    const connections = await Connection.find({
-      $or: [
-        { requester: req.user._id, status: 'accepted' },
-        { recipient: req.user._id, status: 'accepted' }
-      ]
-    });
-    const connectedUserIds = connections.map(conn => 
-      conn.requester.equals(req.user._id) ? conn.recipient : conn.requester
-    );
-    connectedUserIds.push(req.user._id);
-    const posts = await Post.find({
-      author: { $in: connectedUserIds },
-      isPublished: true
-    })
-    .populate('author', 'firstName lastName email')
-    .populate('comments.user', 'firstName lastName')
-    .sort({ createdAt: -1 })
-    .skip(skip)
-    .limit(limit);
-    const totalPosts = await Post.countDocuments({
-      author: { $in: connectedUserIds },
-      isPublished: true
-    });
-
-    res.json({
-      posts,
-      pagination: {
-        currentPage: page,
-        totalPages: Math.ceil(totalPosts / limit),
-        totalPosts,
-        hasNext: page < Math.ceil(totalPosts / limit),
-        hasPrev: page > 1
-      }
-    });
-  } catch (error) {
-    handleError(res, error, 'Get feed error');
-  }
-});
+// GET /api/posts/trending-tags
 router.get('/trending-tags', async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 10;
@@ -294,6 +369,8 @@ router.get('/trending-tags', async (req, res) => {
     handleError(res, error, 'Get trending tags error');
   }
 });
+
+// GET /api/posts/user/:userId
 router.get('/user/:userId', async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -328,6 +405,8 @@ router.get('/user/:userId', async (req, res) => {
     handleError(res, error, 'Get user posts error');
   }
 });
+
+// GET /api/posts/:id
 router.get('/:id', async (req, res) => {
   try {
     const post = await Post.findById(req.params.id)

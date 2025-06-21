@@ -62,7 +62,6 @@ app.get('/api', (req, res) => {
       },
       posts: {
         'POST /api/posts': 'Create new post (protected)',
-        'GET /api/posts/feed': 'Get posts from connections (protected)',
         'GET /api/posts/discover': 'Get discovery feed (public)',
         'GET /api/posts/trending-tags': 'Get trending tags',
         'GET /api/posts/:id': 'Get specific post',
